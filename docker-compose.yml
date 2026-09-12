@@ -1,0 +1,15 @@
+services:
+  bot:
+    build: .
+    image: unsharp-bot:latest
+    env_file:
+      - .env
+    volumes:
+      # Configuration and output live on the host, so they survive a rebuild.
+      - ./config:/app/config:ro
+      - ./data:/app/data
+    # Sessions are timezone-aware; set this to your own zone.
+    environment:
+      TZ: Europe/Paris
+    restart: unless-stopped
+    command: ["run", "--dry-run"]

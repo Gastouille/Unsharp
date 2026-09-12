@@ -63,7 +63,7 @@ la logique de trading ne sait pas qu'elle parle à XTB.
 | Décision | Raison |
 |---|---|
 | **Port `Broker` abstrait** | Changer de broker ou de bibliothèque = écrire un adaptateur, sans toucher à la stratégie. La consigne « rester facilement adaptable » est structurelle, pas déclarative. |
-| **Cœur stratégie *pur*** (candles → signal, aucune I/O) | Testable sans réseau ni compte. Les 96 tests tournent en moins de deux secondes. |
+| **Cœur stratégie *pur*** (candles → signal, aucune I/O) | Testable sans réseau ni compte. Les 114 tests tournent en moins de deux secondes. |
 | **Client xAPI écrit à la main** | xAPI est un protocole JSON requête/réponse d'environ 200 lignes. L'écrire nous donne le contrôle des deux choses qui comptent en production : le **rate limit** (XTB coupe au-delà d'environ 1 requête / 200 ms) et la **reconnexion + re-login**. Les wrappers PyPI masquent le `streamSessionId`, nécessaire pour le socket de streaming. |
 | **Décision sur bougie *clôturée* uniquement** | Pas de repaint : un signal émis à la bougie *t* n'est jamais révisé. C'est ce qui rend le backtest comparable au live. |
 | **Le backtester pilote les mêmes classes** | Détecteur, planner, sizer et broker papier sont partagés. Ce que vous mesurez en backtest est ce que le bot ferait. |
@@ -77,6 +77,9 @@ la logique de trading ne sait pas qu'elle parle à XTB.
 ```
 Unsharp/
 ├── README.md                       ce fichier
+├── install.py                      installeur en une commande (sans dépendance)
+├── Makefile                        raccourcis : setup, init, check, test…
+├── Dockerfile / docker-compose.yml environnement identique partout
 ├── pyproject.toml                  packaging + entrée CLI "unsharp-bot"
 ├── requirements.txt                dépendances runtime
 ├── requirements-dev.txt            + pytest
@@ -86,7 +89,7 @@ Unsharp/
 │   └── config.example.yaml         toute la configuration, commentée
 │
 ├── src/unsharp_bot/
-│   ├── cli.py                      point d'entrée : run / check / scan / backtest / symbols
+│   ├── cli.py                      point d'entrée : init / run / check / scan / backtest / symbols
 │   ├── config.py                   configuration typée (YAML + .env + surcharges CLI)
 │   ├── models.py                   modèles du domaine (Candle, Level, Setup, TradePlan…)
 │   ├── journal.py                  journal des signaux (JSON / CSV / audit JSONL)
@@ -121,7 +124,7 @@ Unsharp/
 │   ├── signals-2026-09-12.csv      le même en CSV
 │   └── audit-2026-09-12.jsonl      trace d'audit
 │
-├── tests/                          96 tests (pytest)
+├── tests/                          114 tests (pytest)
 └── data/
     ├── logs/                       logs texte (créé au lancement)
     └── signals/                    journaux quotidiens (créé au lancement)
@@ -302,28 +305,100 @@ Exemple avec les réglages par défaut (US500, stop à 14.5 points) :
 
 ## 5. Installation
 
-**Prérequis** : Python 3.10 ou plus, `pip`, et un compte **démo** XTB.
+**Prérequis** : Python 3.10 ou plus, et un compte **démo** XTB. Rien d'autre.
+
+### En une commande
 
 ```bash
 git clone <url-du-depot> Unsharp
 cd Unsharp
-
-python3 -m venv .venv
-source .venv/bin/activate          # Windows : .venv\Scripts\activate
-
-pip install --upgrade pip
-pip install -r requirements.txt
-pip install -e .                   # installe la commande "unsharp-bot"
+python3 install.py
 ```
 
-Sans `pip install -e .`, lancez le bot avec `python -m unsharp_bot` depuis la
-racine du projet (ajoutez `src` au `PYTHONPATH` : `export PYTHONPATH=src`).
+C'est tout. Le script est écrit en Python pur, sans aucune dépendance, donc il
+tourne sur **Linux, macOS et Windows** avec un Python nu. Il :
 
-Pour les tests :
+1. vérifie votre version de Python,
+2. crée l'environnement virtuel `.venv`,
+3. installe les dépendances — il utilise [`uv`](https://github.com/astral-sh/uv)
+   s'il est présent sur votre machine, car c'est plus rapide, et retombe sur
+   `pip` sinon,
+4. crée `config/config.yaml` et `.env` à partir des modèles,
+5. affiche les commandes suivantes adaptées à votre shell.
+
+Le relancer est sans danger : rien de ce qui existe déjà n'est écrasé.
+
+Puis :
 
 ```bash
-pip install -r requirements-dev.txt
-pytest
+source .venv/bin/activate     # Windows : .venv\Scripts\Activate.ps1
+unsharp-bot init              # saisie guidée de vos identifiants XTB
+unsharp-bot check             # vérifie la configuration et la connexion
+unsharp-bot run --dry-run     # tourne sans envoyer le moindre ordre
+```
+
+### Options de l'installeur
+
+```bash
+python3 install.py --dev          # installe aussi pytest
+python3 install.py --no-venv      # installe dans le Python courant
+python3 install.py --no-editable  # copie figée plutôt qu'installation éditable
+```
+
+### Avec `make` (Linux, macOS)
+
+```bash
+make setup        # équivaut à python3 install.py
+make init         # saisie des identifiants
+make check        # vérification
+make dry-run      # boucle sans ordre
+make test         # suite de tests
+make help         # toutes les cibles
+```
+
+### Avec Docker
+
+Pour un environnement identique partout, sans toucher au Python de votre machine :
+
+```bash
+cp .env.example .env          # puis renseignez vos identifiants
+docker compose build
+docker compose run --rm bot check
+docker compose up             # lance le bot en mode --dry-run par défaut
+```
+
+La configuration et les journaux restent sur votre machine grâce aux volumes.
+Ajustez `TZ` dans `docker-compose.yml` : les sessions dépendent du fuseau.
+
+### Installation manuelle
+
+Si vous préférez tout contrôler :
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .              # ou: pip install -e ".[dev]" pour les tests
+```
+
+Sans installation, le bot se lance aussi depuis la racine du projet :
+
+```bash
+PYTHONPATH=src python3 -m unsharp_bot check
+```
+
+### Le fichier de configuration est optionnel
+
+`config/config.yaml` n'est **pas obligatoire**. S'il est absent, le bot utilise
+ses valeurs par défaut, qui sont celles du fichier d'exemple. Un dépôt fraîchement
+cloné n'a donc besoin que de vos identifiants pour démarrer. Créez le fichier
+quand vous voulez régler quelque chose, avec `unsharp-bot init` ou en copiant
+`config/config.example.yaml`.
+
+### Tests
+
+```bash
+python3 install.py --dev
+.venv/bin/pytest              # 114 tests, moins de deux secondes
 ```
 
 ---
@@ -334,9 +409,21 @@ Deux fichiers, avec une règle stricte : **aucun secret dans le YAML**.
 
 ### 6.1 `.env` — identifiants (jamais commité)
 
+Le plus simple est l'assistant, qui ne fait jamais apparaître votre mot de passe
+à l'écran ni dans l'historique du shell :
+
 ```bash
-cp .env.example .env
+unsharp-bot init
 ```
+
+Il écrit `.env` en lecture pour vous seul (permissions `600`) et crée
+`config/config.yaml` s'il manque. Pour scripter la chose :
+
+```bash
+unsharp-bot init --non-interactive --user-id 12345678 --mode demo
+```
+
+Le contenu résultant, que vous pouvez aussi écrire à la main :
 
 ```bash
 XTB_USER_ID=12345678              # numéro de compte xStation
@@ -346,6 +433,9 @@ XTB_MODE=demo                     # demo | real
 
 Il n'y a **pas de clé API séparée** chez XTB : on utilise le numéro de compte et
 le mot de passe. Créez d'abord un compte de démonstration.
+
+Si vous laissez les valeurs d'exemple en place, le bot vous le dit clairement au
+démarrage plutôt que de vous laisser face à un refus de connexion XTB obscur.
 
 Surcharges optionnelles, pratiques pour un test rapide sans éditer le YAML :
 
@@ -403,6 +493,15 @@ unsharp-bot --set risk.risk_fraction_per_trade=0.25 \
 ---
 
 ## 7. Lancement du bot
+
+### Saisir ses identifiants
+
+```bash
+unsharp-bot init
+```
+
+Assistant guidé : numéro de compte, mot de passe (masqué), type de compte,
+actifs à scanner. Écrit `.env` et `config/config.yaml`.
 
 ### Vérifier la configuration et la connexion
 

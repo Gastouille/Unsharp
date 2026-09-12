@@ -33,6 +33,22 @@ XTB_ENDPOINTS: dict[str, dict[str, str]] = {
 #: XTB chart periods, in minutes.  Anything else is rejected at load time.
 SUPPORTED_PERIODS: tuple[int, ...] = (1, 5, 15, 30, 60, 240, 1440, 10080, 43200)
 
+#: Values shipped in ``.env.example``.  Detecting them turns a confusing XTB
+#: login rejection into a clear "you have not entered your credentials yet".
+PLACEHOLDER_CREDENTIALS = frozenset({
+    "12345678",
+    "your_xstation_password",
+    "your_password",
+    "votre_mot_de_passe",
+    "changeme",
+    "xxx",
+})
+
+#: Default location of the strategy configuration.  When the file is absent at
+#: this exact path the built-in defaults are used instead of failing, so a fresh
+#: clone can run ``unsharp-bot check`` with nothing but a ``.env``.
+DEFAULT_CONFIG_PATH = "config/config.yaml"
+
 _WEEKDAY_ALIASES: dict[str, int] = {
     "mon": 0, "monday": 0, "lun": 0, "lundi": 0,
     "tue": 1, "tues": 1, "tuesday": 1, "mar": 1, "mardi": 1,
@@ -89,10 +105,24 @@ class BrokerConfig:
             raise ConfigError(f"broker.name must be 'xtb' or 'paper', got {self.name!r}")
         if self.mode not in XTB_ENDPOINTS:
             raise ConfigError(f"broker.mode must be 'demo' or 'real', got {self.mode!r}")
-        if self.name == "xtb" and not (self.user_id and self.password):
+        if self.name != "xtb":
+            return
+        if not (self.user_id and self.password):
             raise ConfigError(
-                "Missing XTB credentials. Set XTB_USER_ID and XTB_PASSWORD in your .env "
-                "(see .env.example)."
+                "Missing XTB credentials. Run 'unsharp-bot init', or set XTB_USER_ID "
+                "and XTB_PASSWORD in your .env (see .env.example)."
+            )
+        placeholders = [
+            name
+            for name, value in (("XTB_USER_ID", self.user_id), ("XTB_PASSWORD", self.password))
+            if value.strip().lower() in PLACEHOLDER_CREDENTIALS
+        ]
+        if placeholders:
+            verb = "still hold" if len(placeholders) > 1 else "still holds"
+            raise ConfigError(
+                f"{' and '.join(placeholders)} {verb} the example value from "
+                ".env.example. Run 'unsharp-bot init' to enter your real XTB demo "
+                "credentials."
             )
 
 
@@ -557,20 +587,36 @@ def apply_env_overrides(config: BotConfig) -> BotConfig:
 
 
 def load_config(
-    path: str | Path = "config/config.yaml",
+    path: str | Path = DEFAULT_CONFIG_PATH,
     env_file: str | Path | None = ".env",
     overrides: dict[str, Any] | None = None,
+    allow_missing: bool | None = None,
 ) -> BotConfig:
-    """Load ``config.yaml``, overlay ``.env`` and CLI overrides, then validate."""
+    """Load ``config.yaml``, overlay ``.env`` and CLI overrides, then validate.
+
+    When ``path`` is the default location and the file does not exist, the
+    built-in defaults are used: a fresh clone only needs credentials to run.
+    An explicitly requested file that is missing is still an error, because
+    that is almost always a typo.  ``allow_missing`` overrides the heuristic.
+    """
     config_path = Path(path)
-    if not config_path.is_file():
+    if allow_missing is None:
+        allow_missing = Path(path) == Path(DEFAULT_CONFIG_PATH)
+
+    if config_path.is_file():
+        raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+        if not isinstance(raw, dict):
+            raise ConfigError(f"{config_path}: the root of the YAML file must be a mapping")
+        base_path = config_path.resolve().parent.parent
+    elif allow_missing:
+        raw = {}
+        base_path = Path.cwd()
+    else:
         raise ConfigError(
             f"Configuration file not found: {config_path}. "
-            "Copy config/config.example.yaml to config/config.yaml to get started."
+            "Run 'unsharp-bot init' to create one, or copy "
+            "config/config.example.yaml to config/config.yaml."
         )
-    raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
-    if not isinstance(raw, dict):
-        raise ConfigError(f"{config_path}: the root of the YAML file must be a mapping")
 
     if env_file is not None:
         load_dotenv(env_file)
@@ -604,7 +650,7 @@ def load_config(
 
     config = BotConfig(
         sessions=sessions,
-        base_path=config_path.resolve().parent.parent,
+        base_path=base_path,
         **sections,
     )
     apply_env_overrides(config)

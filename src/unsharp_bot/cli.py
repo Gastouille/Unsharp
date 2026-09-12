@@ -2,6 +2,7 @@
 
 Sub-commands
 ------------
+``init``      create ``.env`` and ``config/config.yaml``, interactively
 ``run``       start the live loop (demo or real, depending on ``XTB_MODE``)
 ``check``     validate the configuration and the XTB connection, then exit
 ``backtest``  replay historical candles from XTB or a CSV file
@@ -14,15 +15,18 @@ from __future__ import annotations
 import argparse
 import csv
 import dataclasses
+import getpass
 import json
 import logging
+import os
+import shutil
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from .broker.base import Broker, BrokerError
 from .broker.paper import PaperBroker, PaperBrokerConfig
-from .config import BotConfig, ConfigError, load_config
+from .config import DEFAULT_CONFIG_PATH, BotConfig, ConfigError, load_config
 from .engine.bot import UnsharpBot
 from .journal import SignalJournal
 from .logging_setup import setup_logging
@@ -40,7 +44,8 @@ def build_parser() -> argparse.ArgumentParser:
         description="Unsharp Candles trading bot for XTB (xStation5 / xAPI).",
     )
     parser.add_argument(
-        "-c", "--config", default="config/config.yaml", help="path to the YAML configuration"
+        "-c", "--config", default=DEFAULT_CONFIG_PATH,
+        help="path to the YAML configuration (built-in defaults are used when absent)"
     )
     parser.add_argument("-e", "--env-file", default=".env", help="path to the .env file")
     parser.add_argument(
@@ -50,6 +55,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("-v", "--verbose", action="store_true", help="force DEBUG logging")
 
     sub = parser.add_subparsers(dest="command", required=True)
+
+    init = sub.add_parser(
+        "init", help="create .env and config/config.yaml (run this first)"
+    )
+    init.add_argument("--user-id", help="XTB account number (skips the prompt)")
+    init.add_argument("--password", help="XTB password (prefer the prompt: this lands in your shell history)")
+    init.add_argument("--mode", choices=["demo", "real"], help="demo (default) or real")
+    init.add_argument(
+        "--symbols", help="comma-separated symbols to scan, e.g. EURUSD,US500"
+    )
+    init.add_argument(
+        "--non-interactive", action="store_true",
+        help="never prompt; use the flags and the defaults only",
+    )
+    init.add_argument(
+        "--force", action="store_true", help="overwrite existing files"
+    )
 
     run = sub.add_parser("run", help="start the live trading loop")
     run.add_argument(
@@ -123,6 +145,153 @@ def build_broker(config: BotConfig) -> Broker:
 # --------------------------------------------------------------------------- #
 # Commands
 # --------------------------------------------------------------------------- #
+def command_init(args: argparse.Namespace, config: BotConfig) -> int:
+    """Interactive first-run setup: credentials and a strategy config file."""
+    root = Path(args.config).resolve().parent.parent
+    env_path = Path(args.env_file)
+    config_path = Path(args.config)
+    interactive = not args.non_interactive and sys.stdin.isatty()
+
+    print("Unsharp bot - initial setup\n")
+
+    # --- Strategy configuration ------------------------------------------- #
+    template = root / "config" / "config.example.yaml"
+    if not template.is_file():
+        template = Path("config/config.example.yaml")
+    if config_path.exists() and not args.force:
+        print(f"  {config_path} already exists, left untouched (use --force to replace it)")
+    elif template.is_file():
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(template, config_path)
+        print(f"  created {config_path}")
+    else:
+        print(f"  template {template} not found; the built-in defaults will be used")
+
+    # --- Credentials -------------------------------------------------------- #
+    existing = _read_env_file(env_path)
+    explicit = bool(args.user_id or args.password or args.mode or args.symbols)
+    if existing and not args.force and not interactive and not explicit:
+        print(f"  {env_path} already exists, left untouched (use --force to replace it)")
+        _print_init_next_steps()
+        return 0
+
+    user_id = args.user_id or existing.get("XTB_USER_ID", "")
+    password = args.password or existing.get("XTB_PASSWORD", "")
+    mode = args.mode or existing.get("XTB_MODE", "demo")
+    symbols = args.symbols
+
+    if interactive:
+        print("\nXTB credentials. There is no separate API key: use your xStation")
+        print("account number and password. Start with a DEMO account.\n")
+        user_id = _ask("XTB account number (XTB_USER_ID)", user_id)
+        password = _ask_secret("XTB password (XTB_PASSWORD)", password)
+        mode = _ask_choice("Account type", ["demo", "real"], mode)
+        if mode == "real":
+            print("\n  WARNING: 'real' trades with real money.")
+            print("  Test on demo for several weeks first, then start very small.\n")
+        symbols = _ask(
+            "Symbols to scan (comma-separated)", symbols or "EURUSD,US500,GER40"
+        )
+
+    if not user_id or not password:
+        print(
+            "\nNo credentials given, so .env was not written.\n"
+            f"Edit {env_path} yourself, or re-run: unsharp-bot init",
+            file=sys.stderr,
+        )
+        return 2
+
+    values = dict(existing)
+    values.update({"XTB_USER_ID": user_id, "XTB_PASSWORD": password, "XTB_MODE": mode})
+    if symbols:
+        values["UNSHARP_SYMBOLS"] = ",".join(
+            part.strip() for part in symbols.split(",") if part.strip()
+        )
+    _write_env_file(env_path, values)
+    print(f"\n  wrote {env_path} (readable by you only)")
+
+    _print_init_next_steps()
+    return 0
+
+
+def _print_init_next_steps() -> None:
+    print("\nNext steps:")
+    print("  1. unsharp-bot check        verify the configuration and the connection")
+    print("  2. unsharp-bot run --dry-run   detect and journal, send no order")
+    print("  3. unsharp-bot run          trade the account set by XTB_MODE")
+    print(
+        "\nThis software is experimental and is not financial advice. "
+        "Use a demo account first."
+    )
+
+
+def _ask(label: str, default: str = "") -> str:
+    suffix = f" [{default}]" if default else ""
+    try:
+        answer = input(f"  {label}{suffix}: ").strip()
+    except EOFError:
+        return default
+    return answer or default
+
+
+def _ask_secret(label: str, default: str = "") -> str:
+    suffix = " [unchanged]" if default else ""
+    try:
+        answer = getpass.getpass(f"  {label}{suffix}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        return default
+    return answer or default
+
+
+def _ask_choice(label: str, choices: list[str], default: str) -> str:
+    options = "/".join(choices)
+    while True:
+        answer = _ask(f"{label} ({options})", default).lower()
+        if answer in choices:
+            return answer
+        print(f"    please answer with one of: {options}")
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    """Parse an existing .env into a mapping, preserving unknown keys."""
+    values: dict[str, str] = {}
+    if not path.is_file():
+        return values
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip().strip("'\"")
+    return values
+
+
+def _write_env_file(path: Path, values: dict[str, str]) -> None:
+    """Write .env with owner-only permissions (it holds a password)."""
+    lines = [
+        "# Unsharp bot credentials - never commit this file.",
+        "# Regenerate at any time with: unsharp-bot init",
+        "",
+    ]
+    for key in ("XTB_USER_ID", "XTB_PASSWORD", "XTB_MODE", "XTB_APP_NAME"):
+        if values.get(key):
+            lines.append(f"{key}={values[key]}")
+    extras = {k: v for k, v in values.items() if k.startswith("UNSHARP_") and v}
+    if extras:
+        lines.append("")
+        lines.append("# Optional overrides of config.yaml")
+        lines += [f"{key}={value}" for key, value in sorted(extras.items())]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if os.name != "nt":
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
+
+
 def command_run(args: argparse.Namespace, config: BotConfig) -> int:
     if args.dry_run:
         config.execution.dry_run = True
@@ -434,14 +603,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config, args.env_file, parse_overrides(args.overrides))
     except ConfigError as exc:
-        print(f"Configuration error: {exc}", file=sys.stderr)
-        return 2
+        # 'init' exists precisely to create the missing configuration, so it must
+        # still run when the configuration is incomplete.
+        if args.command != "init":
+            print(f"Configuration error: {exc}", file=sys.stderr)
+            return 2
+        config = BotConfig()
 
     if args.verbose:
         config.logging.level = "DEBUG"
     setup_logging(config.logging, config.log_path)
 
     handlers = {
+        "init": command_init,
         "run": command_run,
         "check": command_check,
         "scan": command_scan,
