@@ -111,6 +111,63 @@ def to_utc(timestamp_ms: float) -> datetime:
     return datetime.fromtimestamp(timestamp_ms / 1000.0, tz=timezone.utc)
 
 
+class XtbEndpointError(BrokerError):
+    """The gateway URL itself is wrong: retrying will never help."""
+
+
+def handshake_status(exc: BaseException) -> int | None:
+    """HTTP status of a failed WebSocket handshake, when there is one."""
+    status = getattr(exc, "status_code", None)
+    return status if isinstance(status, int) else None
+
+
+def is_permanent_handshake_failure(exc: BaseException) -> bool:
+    """True for a 4xx handshake: the path or host is wrong, not busy.
+
+    408 (timeout) and 429 (too many requests) are excluded: those do clear up.
+    """
+    status = handshake_status(exc)
+    if status is None:
+        return False
+    return 400 <= status < 500 and status not in (408, 429)
+
+
+def explain_endpoint_failure(url: str, exc: BaseException) -> str:
+    """A message that tells the user what to actually do next."""
+    status = handshake_status(exc)
+    lines = [f"Cannot open the XTB WebSocket gateway at {url}"]
+    if status == 404:
+        lines += [
+            "The server answered 404 Not Found, so it was reached but this path "
+            "does not exist on it.",
+            "That is an endpoint problem, not a credentials problem: the handshake "
+            "fails before any login is attempted.",
+            "",
+            "What to try, in order:",
+            "  1. unsharp-bot endpoints      -- shows which XTB gateways answer from here",
+            "  2. Confirm XTB_MODE in your .env. A demo account needs XTB_MODE=demo.",
+            "  3. If XTB has moved the endpoint, set it yourself without waiting for a "
+            "release:",
+            "       broker:",
+            "         main_url:   wss://.../...",
+            "         stream_url: wss://.../...",
+        ]
+    elif status in (401, 403):
+        lines += [
+            f"The server answered {status}, so the gateway refused the connection.",
+            "Check whether a VPN, a corporate proxy or a firewall sits in the way, "
+            "and whether XTB allows API access from your country and account type.",
+        ]
+    elif status is not None:
+        lines.append(f"The server answered HTTP {status}.")
+    else:
+        lines += [
+            f"Transport error: {exc}",
+            "Check your internet connection, then run: unsharp-bot endpoints",
+        ]
+    return "\n".join(lines)
+
+
 class RateLimiter:
     """Serialises commands so we never exceed the broker's request rate."""
 
@@ -181,6 +238,12 @@ class XtbClient:
             self._start_ping_loop()
 
     def _open_socket(self) -> None:
+        """Open the socket, retrying only failures that can actually clear up.
+
+        A 4xx handshake means the URL is wrong.  Retrying it eight times with
+        exponential backoff wastes minutes and buries the real message, so it
+        fails immediately with an explanation instead.
+        """
         delay = self.reconnect_base_delay
         last_error: Exception | None = None
         for attempt in range(1, max(1, self.reconnect_max_attempts) + 1):
@@ -193,6 +256,12 @@ class XtbClient:
                 return
             except Exception as exc:  # network errors are expected here
                 last_error = exc
+                if is_permanent_handshake_failure(exc):
+                    message = explain_endpoint_failure(self.url, exc)
+                    LOGGER.error("%s", message)
+                    raise XtbEndpointError(
+                        message, code=str(handshake_status(exc) or "")
+                    ) from exc
                 LOGGER.warning(
                     "WebSocket connection to %s failed (attempt %d/%d): %s",
                     self.url, attempt, self.reconnect_max_attempts, exc,
@@ -201,9 +270,7 @@ class XtbClient:
                     break
                 time.sleep(delay)
                 delay = min(delay * 2, self.reconnect_max_delay)
-        raise BrokerConnectionError(
-            f"Unable to connect to {self.url}: {last_error}"
-        )
+        raise BrokerConnectionError(explain_endpoint_failure(self.url, last_error))
 
     def login(self) -> None:
         """xAPI ``login``; stores the ``streamSessionId`` for the stream socket."""

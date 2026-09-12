@@ -8,6 +8,7 @@ Sub-commands
 ``backtest``  replay historical candles from XTB or a CSV file
 ``scan``      one-shot scan of the current candles (no order), for a smoke test
 ``symbols``   list the XTB instruments matching a pattern
+``endpoints`` probe the XTB gateways to find which ones answer (no credentials)
 """
 
 from __future__ import annotations
@@ -112,6 +113,14 @@ def build_parser() -> argparse.ArgumentParser:
     instrument.add_argument("--precision", type=int, help="number of price decimals")
     instrument.add_argument("--leverage", type=float,
                             help="XTB margin percentage (5 = 5%% margin = 20:1)")
+
+    endpoints = sub.add_parser(
+        "endpoints",
+        help="probe the XTB gateways to see which ones answer (sends no credentials)",
+    )
+    endpoints.add_argument(
+        "--timeout", type=float, default=10.0, help="per-probe timeout in seconds"
+    )
 
     symbols = sub.add_parser("symbols", help="list XTB instruments")
     symbols.add_argument("--filter", default="", help="case-insensitive substring filter")
@@ -309,9 +318,12 @@ def command_check(args: argparse.Namespace, config: BotConfig) -> int:
     """Validate the config, connect, and print what the bot can see."""
     print("Configuration loaded successfully.")
     print(f"  broker           : {config.broker.name} ({config.broker.mode})")
+    if config.broker.name == "xtb" and config.broker.mode == "real":
+        print("  *** REAL ACCOUNT: orders here use real money. "
+              "Set XTB_MODE=demo in .env for the demo account. ***")
     if config.broker.name == "xtb":
-        print(f"  main socket      : {config.broker.main_url}")
-        print(f"  stream socket    : {config.broker.stream_url}")
+        print(f"  main socket      : {config.broker.main_endpoint}")
+        print(f"  stream socket    : {config.broker.stream_endpoint}")
     print(f"  symbols          : {', '.join(config.market.symbols)}")
     print(f"  timeframe        : {config.market.timeframe_minutes} min")
     print(f"  risk fraction    : {config.risk.risk_fraction_per_trade:.0%} of available capital")
@@ -487,6 +499,112 @@ def command_backtest(args: argparse.Namespace, config: BotConfig) -> int:
     return 0
 
 
+def command_endpoints(args: argparse.Namespace, config: BotConfig) -> int:
+    """Probe every known XTB gateway and report which ones answer.
+
+    The probe stops at the WebSocket handshake: **no credentials are ever sent**.
+    Use it when a connection fails, to tell "XTB moved the endpoint" apart from
+    "my network blocks it" and from "my password is wrong".
+    """
+    from .config import XTB_ENDPOINTS, XTB_TCP_ENDPOINTS
+
+    timeout = max(1.0, args.timeout)
+    print("Probing the XTB gateways. No credentials are sent.\n")
+
+    # --- WebSocket gateways (what this bot uses) ------------------------- #
+    print(f"{'GATEWAY':<34}{'URL':<36}RESULT")
+    results: dict[str, bool] = {}
+    targets: list[tuple[str, str]] = []
+    for mode in ("demo", "real"):
+        targets.append((f"{mode} main", XTB_ENDPOINTS[mode]["main"]))
+        targets.append((f"{mode} streaming", XTB_ENDPOINTS[mode]["stream"]))
+    if config.broker.uses_custom_endpoint:
+        if config.broker.main_url:
+            targets.append(("configured main", config.broker.main_endpoint))
+        if config.broker.stream_url:
+            targets.append(("configured streaming", config.broker.stream_endpoint))
+
+    for label, url in targets:
+        status = _probe_websocket(url, timeout)
+        results[url] = status.startswith("OK")
+        print(f"{label:<34}{url:<36}{status}")
+
+    # --- Official TCP gateways (diagnostic only) ------------------------- #
+    print(f"\n{'TCP GATEWAY (xAPI docs)':<34}{'ADDRESS':<36}RESULT")
+    for mode, (host, main_port, stream_port) in XTB_TCP_ENDPOINTS.items():
+        for label, port in ((f"{mode} main", main_port), (f"{mode} streaming", stream_port)):
+            address = f"{host}:{port}"
+            print(f"{label:<34}{address:<36}{_probe_tcp(host, port, timeout)}")
+
+    # --- Verdict ---------------------------------------------------------- #
+    working = [url for url, is_ok in results.items() if is_ok]
+    print()
+    if not working:
+        print("No WebSocket gateway answered.")
+        print("Either your network blocks them (VPN, corporate proxy, firewall),")
+        print("or XTB is unreachable from here. If the TCP rows above succeeded,")
+        print("the outage is specific to the WebSocket gateway.")
+        return 1
+
+    print(f"{len(working)} gateway(s) answered:")
+    for url in working:
+        print(f"  {url}")
+    expected = (config.broker.main_endpoint, config.broker.stream_endpoint)
+    broken = [url for url in expected if url in results and not results[url]]
+    if broken:
+        print("\nThe gateway your configuration points at did NOT answer:")
+        for url in broken:
+            print(f"  {url}")
+        print("\nPoint the bot at a working one in config/config.yaml:")
+        print("  broker:")
+        print(f"    main_url:   {working[0]}")
+        print("    stream_url: <the matching ...Stream URL>")
+    else:
+        print("\nYour configured gateways answered. A failure to connect is then")
+        print("about credentials or account type, not about the endpoint.")
+    return 0
+
+
+def _probe_websocket(url: str, timeout: float) -> str:
+    """Open and immediately close a WebSocket handshake.  Sends nothing."""
+    import websocket
+
+    try:
+        connection = websocket.create_connection(url, timeout=timeout)
+    except Exception as exc:
+        from .broker.xtb_client import handshake_status
+
+        status = handshake_status(exc)
+        if status is not None:
+            meaning = {
+                404: "path not found on this host",
+                403: "refused",
+                401: "unauthorised",
+                429: "rate limited",
+            }.get(status, "")
+            return f"HTTP {status}" + (f" ({meaning})" if meaning else "")
+        return f"unreachable ({type(exc).__name__}: {exc})"[:70]
+    try:
+        connection.close()
+    except Exception:
+        pass
+    return "OK (handshake accepted)"
+
+
+def _probe_tcp(host: str, port: int, timeout: float) -> str:
+    """Open a TLS connection to a raw xAPI port.  Sends nothing."""
+    import socket
+    import ssl
+
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as raw:
+            context = ssl.create_default_context()
+            with context.wrap_socket(raw, server_hostname=host):
+                return "OK (TLS established)"
+    except Exception as exc:
+        return f"unreachable ({type(exc).__name__})"[:70]
+
+
 def command_symbols(args: argparse.Namespace, config: BotConfig) -> int:
     broker = build_broker(config)
     broker.connect()
@@ -603,11 +721,13 @@ def main(argv: list[str] | None = None) -> int:
     try:
         config = load_config(args.config, args.env_file, parse_overrides(args.overrides))
     except ConfigError as exc:
-        # 'init' exists precisely to create the missing configuration, so it must
-        # still run when the configuration is incomplete.
-        if args.command != "init":
+        # 'init' exists to create the missing configuration, and 'endpoints' is
+        # the diagnostic you reach for while setting up, so neither may require a
+        # complete configuration.  'endpoints' sends no credentials anyway.
+        if args.command not in ("init", "endpoints"):
             print(f"Configuration error: {exc}", file=sys.stderr)
             return 2
+        print(f"Note: {exc}\n", file=sys.stderr)
         config = BotConfig()
 
     if args.verbose:
@@ -621,6 +741,7 @@ def main(argv: list[str] | None = None) -> int:
         "scan": command_scan,
         "backtest": command_backtest,
         "symbols": command_symbols,
+        "endpoints": command_endpoints,
     }
     handler = handlers[args.command]
     try:

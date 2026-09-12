@@ -18,6 +18,14 @@ broker:
   order_retry_base_delay: 1.5
   use_streaming: true           # real-time quotes on the streaming socket
 
+  # Override the WebSocket gateways. Leave empty to use the default for the mode:
+  #   demo -> wss://ws.xtb.com/demo  + wss://ws.xtb.com/demoStream
+  #   real -> wss://ws.xtb.com/real  + wss://ws.xtb.com/realStream
+  # Set these if XTB moves an endpoint, so a hardcoded URL never blocks you.
+  # Run `unsharp-bot endpoints` to see which gateways answer from your machine.
+  main_url: ""
+  stream_url: ""
+
 market:
   symbols:                      # XTB symbol names -- check them with: unsharp-bot symbols
     - EURUSD

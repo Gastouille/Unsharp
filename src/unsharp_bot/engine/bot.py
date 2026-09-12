@@ -139,11 +139,23 @@ class UnsharpBot:
             self.config.broker.name, mode, self.config.execution.dry_run,
             self.config.market.timeframe_minutes, ", ".join(self.config.market.symbols),
         )
-        if self.config.broker.name == "xtb" and mode == "REAL" and not self.config.execution.dry_run:
-            LOGGER.warning(
-                "RUNNING ON A REAL XTB ACCOUNT - real money is at risk. "
-                "Set XTB_MODE=demo to trade the demo account."
-            )
+        # Always say which account we are about to authenticate against.  A
+        # dry run still logs into the real account, so staying silent about it
+        # in dry-run mode is exactly how you end up on 'real' without noticing.
+        if self.config.broker.name == "xtb" and mode == "REAL":
+            if self.config.execution.dry_run:
+                LOGGER.warning(
+                    "Connecting to the REAL XTB account (XTB_MODE=real). "
+                    "--dry-run means no order will be sent, but this is your live "
+                    "account. Set XTB_MODE=demo in your .env to use the demo one."
+                )
+            else:
+                LOGGER.warning(
+                    "RUNNING ON A REAL XTB ACCOUNT - real money is at risk. "
+                    "Set XTB_MODE=demo to trade the demo account."
+                )
+        LOGGER.info("Gateway: %s", self.config.broker.main_endpoint
+                    if self.config.broker.name == "xtb" else self.config.broker.name)
 
         self.broker.connect()
         self._resolve_symbols()

@@ -144,7 +144,7 @@ def test_load_example_config(tmp_path, monkeypatch):
     config = load_config("config/config.example.yaml", env_file=None)
     assert config.broker.user_id == "999"
     assert config.broker.mode == "demo"
-    assert config.broker.main_url == "wss://ws.xtb.com/demo"
+    assert config.broker.main_endpoint == "wss://ws.xtb.com/demo"
     assert config.risk.risk_fraction_per_trade == 0.5
     assert len(config.sessions) == 2
 
@@ -154,8 +154,8 @@ def test_real_mode_switches_the_endpoints(monkeypatch):
     monkeypatch.setenv("XTB_PASSWORD", "secret")
     monkeypatch.setenv("XTB_MODE", "real")
     config = load_config("config/config.example.yaml", env_file=None)
-    assert config.broker.main_url == "wss://ws.xtb.com/real"
-    assert config.broker.stream_url == "wss://ws.xtb.com/realStream"
+    assert config.broker.main_endpoint == "wss://ws.xtb.com/real"
+    assert config.broker.stream_endpoint == "wss://ws.xtb.com/realStream"
 
 
 def test_missing_credentials_are_rejected(monkeypatch):

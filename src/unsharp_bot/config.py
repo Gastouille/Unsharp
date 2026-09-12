@@ -19,6 +19,12 @@ import yaml
 # --------------------------------------------------------------------------- #
 # XTB endpoints (xStation5 / xAPI)
 # --------------------------------------------------------------------------- #
+#: Default WebSocket gateways, as published by XTB.
+#:
+#: These can be overridden per account with ``broker.main_url`` and
+#: ``broker.stream_url``: brokers do move endpoints, and a hardcoded URL should
+#: never be the thing that stops you trading.  Run ``unsharp-bot endpoints`` to
+#: see which ones actually answer from your machine.
 XTB_ENDPOINTS: dict[str, dict[str, str]] = {
     "demo": {
         "main": "wss://ws.xtb.com/demo",
@@ -28,6 +34,15 @@ XTB_ENDPOINTS: dict[str, dict[str, str]] = {
         "main": "wss://ws.xtb.com/real",
         "stream": "wss://ws.xtb.com/realStream",
     },
+}
+
+#: The official xAPI TCP+SSL gateways, documented at developers.xstore.pro.
+#: This bot speaks WebSocket, so these are shown for diagnostics only: if the
+#: WebSocket gateway is down but these answer, the outage is gateway-specific.
+XTB_TCP_ENDPOINTS: dict[str, tuple[str, int, int]] = {
+    # mode: (host, main port, streaming port)
+    "demo": ("xapi.xtb.com", 5124, 5125),
+    "real": ("xapi.xtb.com", 5112, 5113),
 }
 
 #: XTB chart periods, in minutes.  Anything else is rejected at load time.
@@ -91,20 +106,34 @@ class BrokerConfig:
     order_retry_attempts: int = 4
     order_retry_base_delay: float = 1.5
     use_streaming: bool = True
+    #: Override the WebSocket gateways.  Empty means "use the default for the
+    #: mode".  Set these if XTB moves an endpoint, without waiting for a release.
+    main_url: str = ""
+    stream_url: str = ""
 
     @property
-    def main_url(self) -> str:
-        return XTB_ENDPOINTS[self.mode]["main"]
+    def main_endpoint(self) -> str:
+        return self.main_url.strip() or XTB_ENDPOINTS[self.mode]["main"]
 
     @property
-    def stream_url(self) -> str:
-        return XTB_ENDPOINTS[self.mode]["stream"]
+    def stream_endpoint(self) -> str:
+        return self.stream_url.strip() or XTB_ENDPOINTS[self.mode]["stream"]
+
+    @property
+    def uses_custom_endpoint(self) -> bool:
+        return bool(self.main_url.strip() or self.stream_url.strip())
 
     def validate(self) -> None:
         if self.name not in ("xtb", "paper"):
             raise ConfigError(f"broker.name must be 'xtb' or 'paper', got {self.name!r}")
         if self.mode not in XTB_ENDPOINTS:
             raise ConfigError(f"broker.mode must be 'demo' or 'real', got {self.mode!r}")
+        for label, url in (("main_url", self.main_url), ("stream_url", self.stream_url)):
+            if url and not url.strip().startswith(("ws://", "wss://")):
+                raise ConfigError(
+                    f"broker.{label} must be a WebSocket URL starting with wss:// "
+                    f"(got {url!r})"
+                )
         if self.name != "xtb":
             return
         if not (self.user_id and self.password):

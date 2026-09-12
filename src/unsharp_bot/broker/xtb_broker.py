@@ -46,7 +46,7 @@ class XtbBroker(Broker):
     def __init__(self, config: BrokerConfig) -> None:
         self.config = config
         self.client = XtbClient(
-            url=config.main_url,
+            url=config.main_endpoint,
             user_id=config.user_id,
             password=config.password,
             app_name=config.app_name,
@@ -80,7 +80,7 @@ class XtbBroker(Broker):
     def _start_streaming(self) -> None:
         try:
             self.stream = XtbStreamClient(
-                url=self.config.stream_url,
+                url=self.config.stream_endpoint,
                 stream_session_id=self.client.stream_session_id or "",
                 on_tick=self._handle_tick,
                 on_trade=self._handle_trade,

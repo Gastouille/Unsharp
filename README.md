@@ -23,7 +23,8 @@ disponible.
 7. [Lancement du bot](#7-lancement-du-bot)
 8. [Logs et fichiers de signaux](#8-logs-et-fichiers-de-signaux)
 9. [Adapter à XTB (démo → réel)](#9-adapter-à-xtb-démo--réel)
-10. [Avertissements](#10-avertissements)
+10. [En cas de problème de connexion](#9-bis-en-cas-de-problème-de-connexion)
+11. [Avertissements](#10-avertissements)
 
 ---
 
@@ -63,7 +64,7 @@ la logique de trading ne sait pas qu'elle parle à XTB.
 | Décision | Raison |
 |---|---|
 | **Port `Broker` abstrait** | Changer de broker ou de bibliothèque = écrire un adaptateur, sans toucher à la stratégie. La consigne « rester facilement adaptable » est structurelle, pas déclarative. |
-| **Cœur stratégie *pur*** (candles → signal, aucune I/O) | Testable sans réseau ni compte. Les 114 tests tournent en moins de deux secondes. |
+| **Cœur stratégie *pur*** (candles → signal, aucune I/O) | Testable sans réseau ni compte. Les 136 tests tournent en moins de deux secondes. |
 | **Client xAPI écrit à la main** | xAPI est un protocole JSON requête/réponse d'environ 200 lignes. L'écrire nous donne le contrôle des deux choses qui comptent en production : le **rate limit** (XTB coupe au-delà d'environ 1 requête / 200 ms) et la **reconnexion + re-login**. Les wrappers PyPI masquent le `streamSessionId`, nécessaire pour le socket de streaming. |
 | **Décision sur bougie *clôturée* uniquement** | Pas de repaint : un signal émis à la bougie *t* n'est jamais révisé. C'est ce qui rend le backtest comparable au live. |
 | **Le backtester pilote les mêmes classes** | Détecteur, planner, sizer et broker papier sont partagés. Ce que vous mesurez en backtest est ce que le bot ferait. |
@@ -124,7 +125,7 @@ Unsharp/
 │   ├── signals-2026-09-12.csv      le même en CSV
 │   └── audit-2026-09-12.jsonl      trace d'audit
 │
-├── tests/                          114 tests (pytest)
+├── tests/                          136 tests (pytest)
 └── data/
     ├── logs/                       logs texte (créé au lancement)
     └── signals/                    journaux quotidiens (créé au lancement)
@@ -398,7 +399,7 @@ quand vous voulez régler quelque chose, avec `unsharp-bot init` ou en copiant
 
 ```bash
 python3 install.py --dev
-.venv/bin/pytest              # 114 tests, moins de deux secondes
+.venv/bin/pytest              # 136 tests, moins de deux secondes
 ```
 
 ---
@@ -512,6 +513,15 @@ unsharp-bot check
 Affiche les paramètres chargés, se connecte à XTB, montre le solde et la fiche
 technique de chaque instrument (lot minimum, pas de lot, valeur du tick, levier).
 **À faire en premier, toujours.**
+
+### Tester les passerelles XTB
+
+```bash
+unsharp-bot endpoints
+```
+
+Teste chaque passerelle XTB connue et indique lesquelles répondent, sans envoyer
+le moindre identifiant. À lancer en premier en cas d'erreur de connexion.
 
 ### Trouver les noms de symboles XTB
 
@@ -683,7 +693,9 @@ python -c "import json;d=json.load(open('data/signals/signals-2026-09-12.json'))
 | Démonstration | `wss://ws.xtb.com/demo` | `wss://ws.xtb.com/demoStream` |
 | Réel | `wss://ws.xtb.com/real` | `wss://ws.xtb.com/realStream` |
 
-Le choix est automatique à partir de `XTB_MODE` : vous ne touchez jamais aux URL.
+Le choix est automatique à partir de `XTB_MODE` : vous n'avez normalement pas à
+toucher aux URL. Si XTB en déplace une, `broker.main_url` et `broker.stream_url`
+dans `config/config.yaml` permettent de la remplacer sans modifier le code.
 
 ### Passer de la démo au réel
 
@@ -734,6 +746,74 @@ Implémentez `broker/base.py::Broker` (12 méthodes) dans un nouveau fichier, pu
 ajoutez-le à `cli.py::build_broker`. Aucune ligne de stratégie ne bouge. Pour
 utiliser le paquet PyPI `XTBApi` à la place du client maison, seul
 `xtb_broker.py` est à réécrire.
+
+---
+
+## 9 bis. En cas de problème de connexion
+
+### `Handshake status 404 Not Found`
+
+```
+WebSocket connection to wss://ws.xtb.com/real failed: Handshake status 404 Not Found
+```
+
+Le serveur XTB a bien été joint, mais **ce chemin n'existe pas sur lui**. C'est un
+problème d'adresse, pas d'identifiants : la poignée de main échoue avant toute
+tentative de connexion au compte. Votre mot de passe n'est pas en cause.
+
+Dans l'ordre :
+
+```bash
+unsharp-bot endpoints
+```
+
+Cette commande teste toutes les passerelles XTB connues depuis votre machine et
+affiche celles qui répondent. **Elle n'envoie aucun identifiant** : elle s'arrête
+à la poignée de main. Elle teste aussi les ports TCP officiels de l'xAPI, ce qui
+permet de distinguer « la passerelle WebSocket est en panne » de « XTB est
+injoignable depuis mon réseau ».
+
+Ensuite :
+
+1. **Vérifiez `XTB_MODE` dans votre `.env`.** Un compte de démonstration exige
+   `XTB_MODE=demo`. Voir la note ci-dessous.
+2. **Si XTB a déplacé l'adresse**, pointez le bot ailleurs sans attendre une mise
+   à jour du code :
+   ```yaml
+   broker:
+     main_url:   "wss://.../..."
+     stream_url: "wss://.../...Stream"
+   ```
+3. **Si rien ne répond**, cherchez du côté de votre réseau : VPN, proxy
+   d'entreprise, pare-feu, ou un fournisseur d'accès qui bloque les WebSockets.
+
+### `--dry-run` ne protège pas du choix du compte
+
+`--dry-run` empêche l'envoi d'ordres. Il **n'empêche pas** l'authentification sur
+le compte désigné par `XTB_MODE`. Si cette variable vaut `real`, le bot se
+connecte à votre compte réel, même en dry run. Le bot vous en avertit maintenant
+explicitement au démarrage dans les deux cas.
+
+Pour repasser en démonstration :
+
+```bash
+unsharp-bot init          # et choisissez "demo"
+# ou directement dans .env :
+XTB_MODE=demo
+```
+
+### Les erreurs transitoires et les erreurs définitives
+
+Le bot distingue désormais les deux :
+
+| Réponse | Traitement |
+|---|---|
+| 4xx (404, 403, 401…) | échec immédiat, avec un diagnostic. Réessayer ne peut pas aider. |
+| 408, 429, 5xx, coupure réseau | réessais avec backoff exponentiel |
+
+Auparavant, un 404 déclenchait huit tentatives espacées, soit environ trois
+minutes d'attente avant que la vraie cause n'apparaisse, noyée dans les
+avertissements.
 
 ---
 
