@@ -311,7 +311,7 @@ Exemple avec les réglages par défaut (US500, stop à 14.5 points) :
 ### En une commande
 
 ```bash
-git clone <url-du-depot> Unsharp
+git clone https://github.com/Gastouille/Unsharp.git Unsharp
 cd Unsharp
 python3 install.py
 ```
