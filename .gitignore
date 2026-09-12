@@ -1,0 +1,27 @@
+# Secrets and local configuration
+.env
+config/config.yaml
+
+# Runtime output (the directories are kept, their contents are not)
+data/logs/*
+data/signals/*
+!data/logs/.gitkeep
+!data/signals/.gitkeep
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

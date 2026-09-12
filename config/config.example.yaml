@@ -1,0 +1,154 @@
+# =============================================================================
+#  Unsharp Candles bot - example configuration
+#  Copy this file to config/config.yaml and adapt it.
+#  NEVER put your XTB credentials here: they belong in .env (see .env.example).
+# =============================================================================
+
+broker:
+  name: xtb                     # xtb | paper (paper = fully offline simulation)
+  mode: demo                    # demo | real  -- overridden by XTB_MODE in .env
+  app_name: unsharp-bot
+  min_request_interval: 0.25    # XTB rate-limits to roughly 1 request / 200 ms
+  request_timeout: 20.0
+  ping_interval: 150.0          # keeps the main socket alive
+  reconnect_max_attempts: 8
+  reconnect_base_delay: 2.0     # exponential backoff: 2s, 4s, 8s, ...
+  reconnect_max_delay: 60.0
+  order_retry_attempts: 4       # retries when an order fails to go through
+  order_retry_base_delay: 1.5
+  use_streaming: true           # real-time quotes on the streaming socket
+
+market:
+  symbols:                      # XTB symbol names -- check them with: unsharp-bot symbols
+    - EURUSD
+    - US500
+    - GER40
+  timeframe_minutes: 5          # 1, 5, 15, 30, 60, 240, 1440
+  history_size: 400             # candles kept in memory per symbol
+  warmup_candles: 300           # candles pulled at startup
+  use_daily_levels: true        # adds previous-day high/low/close as key levels
+  poll_offset_seconds: 4.0      # wait after a candle close before polling
+  skip_disabled_symbols: true
+
+# Trading sessions. Times are local to the given timezone.
+# The bot idles outside these windows and wakes up before the next open.
+sessions:
+  - name: europe
+    start: "09:00"
+    end: "17:30"
+    timezone: Europe/Paris
+    days: [mon, tue, wed, thu, fri]
+    opening_window_minutes: 0   # 0 = the whole session; 60 = only the first hour
+    flatten_before_close_minutes: 5
+
+  - name: us
+    start: "09:30"
+    end: "16:00"
+    timezone: America/New_York
+    days: [mon, tue, wed, thu, fri]
+    opening_window_minutes: 0
+    flatten_before_close_minutes: 10
+
+# "Trade when the market is active" filter from the method.
+timing:
+  enabled: true
+  opening_minutes: 60           # always allow entries in the first hour
+  pivot_period_minutes: 30      # then only around each :00 / :30 pivot
+  pivot_window_minutes: 10      # tolerance around a pivot
+  blackout_windows: []          # e.g. ["12:30-13:30"] to skip the lunch lull
+
+# Key-level detection: the Unsharp sequence is only valid ON a level.
+levels:
+  swing_lookback: 3             # fractal window (3 candles on each side)
+  scan_window: 150              # candles scanned to build the level map
+  cluster_atr: 0.5              # levels closer than 0.5 ATR are merged
+  zone_width_atr: 0.25          # a level is a zone of +/- 0.25 ATR
+  max_levels: 40
+  include_recent_extremes: true
+  include_session_extremes: true
+  include_previous_day: true
+  include_round_numbers: false
+  round_number_step: 0.0        # 0 = derive from the visible price range
+  min_touches: 1
+
+# Lead / Confirmation / Execution thresholds.
+unsharp:
+  # --- Lead Candle: the big directional push that creates liquidity ---------
+  lead_min_body_atr: 0.8        # body >= 0.8 x ATR
+  lead_min_body_ratio: 1.5      # body >= 1.5 x the average body
+  lead_min_body_to_range: 0.5   # a clean candle, not a doji with huge wicks
+  body_average_window: 20
+
+  # --- Confirmation: price can no longer extend, wicks reject the level -----
+  min_confirmation_candles: 1
+  max_confirmation_candles: 5
+  confirmation_max_body_ratio: 0.55      # small bodies vs the Lead
+  confirmation_min_wick_ratio: 0.30      # rejection wick >= 30% of the range
+  confirmation_min_wick_share: 0.34      # at least a third of the zone candles
+  confirmation_max_overshoot_atr: 0.35   # how far the sweep may extend the Lead
+  confirmation_max_zone_to_lead_range: 0.85
+
+  # --- Execution: the pivot is confirmed, this is the entry trigger ---------
+  execution_min_body_atr: 0.35
+  execution_min_body_to_range: 0.45
+  execution_min_close_position: 0.60     # closes in the top 40% of its range
+  execution_must_break_zone: true
+  execution_min_breakout_atr: 0.0
+
+  # --- Level anchoring ------------------------------------------------------
+  level_tolerance_atr: 0.60     # the zone must sit within 0.6 ATR of a level
+  require_level: true           # false = accept setups "in thin air" (not advised)
+
+  # --- Trade construction ---------------------------------------------------
+  stop_reference: confirmation_zone   # confirmation_zone | lead_and_zone
+  stop_buffer_atr: 0.15               # extra room beyond the wicks
+  min_risk_reward: 2.0                # minimum R/R (the method suggests 2 or 3)
+  max_target_rr: 8.0                  # ignore levels further than 8R
+  allow_synthetic_target: true        # fall back to exactly min_risk_reward
+  min_stop_distance_atr: 0.15
+  entry_mode: execution_close         # execution_close | next_open
+  atr_period: 14
+
+# Progressive money management.
+risk:
+  # Fraction of the AVAILABLE CAPITAL committed per trade.
+  #   capital_available = equity - margin_used - buffer_fraction * equity
+  risk_fraction_per_trade: 0.5        # 50% by default
+  notional_basis: margin              # margin (default, conservative) | exposure
+
+  # Hard cap: the loss if the stop is hit can never exceed this share of equity.
+  # THIS is what really bounds the risk; the fraction above only sets ambition.
+  max_loss_fraction_of_equity: 0.02   # 2%
+
+  buffer_fraction: 0.10               # 10% of equity kept away from a margin call
+  use_broker_margin_check: true       # ask XTB for the exact margin of the volume
+  max_margin_fraction_of_capital: 1.0
+
+  # Portfolio guards
+  max_open_positions: 3
+  max_positions_per_symbol: 1
+  max_trades_per_day: 10
+  daily_loss_limit_fraction: 0.06     # stop for the day after -6%
+  daily_profit_target_fraction: 0.0   # 0 = disabled
+  cooldown_minutes_after_loss: 30
+  cooldown_minutes_after_trade: 0
+  min_equity_fraction: 0.5
+
+execution:
+  dry_run: false                # true = detect and journal, never send an order
+  attach_sl_tp: true            # SL/TP attached to the order: survives a crash
+  max_entry_slippage_atr: 0.5   # skip the trade if price ran away from the plan
+  breakeven_at_r: 0.0           # e.g. 1.0 = move the stop to break-even at +1R
+  trailing_atr: 0.0             # e.g. 1.5 = trail the stop by 1.5 ATR
+  flatten_at_session_end: true
+  order_comment_prefix: UNSHARP
+
+logging:
+  level: INFO                   # DEBUG | INFO | WARNING | ERROR
+  directory: data/logs
+  filename: unsharp-bot.log
+  backup_count: 30              # days of rotated logs kept
+  console: true
+  signals_directory: data/signals
+  write_csv: true
+  write_jsonl_audit: true

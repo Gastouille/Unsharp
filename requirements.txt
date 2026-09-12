@@ -1,0 +1,6 @@
+# Runtime dependencies
+websocket-client>=1.6,<2.0   # xAPI WebSocket transport
+PyYAML>=6.0,<7.0             # configuration file
+
+# Optional, for development and tests
+# pytest>=7.4

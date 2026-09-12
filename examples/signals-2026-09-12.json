@@ -1,0 +1,154 @@
+{
+  "date": "2026-09-12",
+  "generated_at": "2026-09-12T13:40:18.937368+00:00",
+  "count": 2,
+  "signals": [
+    {
+      "signal_id": "US500-20260912T144500-08b25c",
+      "timestamp": "2026-09-12T14:45:00+00:00",
+      "symbol": "US500",
+      "direction": "LONG",
+      "entry_price": 5234.5,
+      "stop_price": 5218.7,
+      "target_price": 5266.1,
+      "volume": 14.06,
+      "ratio_rr": 2.0,
+      "level_used": {
+        "price": 5220.2,
+        "type": "recent_low",
+        "touches": 1,
+        "width": 2.53530501
+      },
+      "status": "OPEN",
+      "pnl": null,
+      "risk_fraction_used": 0.5,
+      "capital_available_before_trade": 10000.0,
+      "notional_engaged": 3679.85,
+      "risk_amount": 222.15,
+      "margin_required": 3679.85,
+      "position_id": 418823941,
+      "order_id": 418823941,
+      "close_time": null,
+      "close_price": null,
+      "close_reason": null,
+      "rejection_reason": null,
+      "session": "europe",
+      "timeframe_minutes": 5,
+      "notes": [
+        "synthetic_target_no_level_at_min_rr",
+        "capped_by_max_loss_constraint"
+      ],
+      "setup": {
+        "symbol": "US500",
+        "direction": "LONG",
+        "lead": {
+          "timestamp": "2026-09-12T14:30:00+00:00",
+          "open": 5250.0,
+          "high": 5251.0,
+          "low": 5221.0,
+          "close": 5224.5,
+          "volume": 1200
+        },
+        "confirmation": [
+          {
+            "timestamp": "2026-09-12T14:35:00+00:00",
+            "open": 5224.5,
+            "high": 5228.0,
+            "low": 5220.2,
+            "close": 5226.5,
+            "volume": 1200
+          },
+          {
+            "timestamp": "2026-09-12T14:40:00+00:00",
+            "open": 5226.5,
+            "high": 5229.5,
+            "low": 5221.5,
+            "close": 5227.5,
+            "volume": 1200
+          }
+        ],
+        "execution": {
+          "timestamp": "2026-09-12T14:45:00+00:00",
+          "open": 5227.5,
+          "high": 5235.2,
+          "low": 5227.0,
+          "close": 5234.5,
+          "volume": 1200
+        },
+        "level": {
+          "price": 5220.2,
+          "type": "recent_low",
+          "touches": 1,
+          "width": 2.53530501
+        },
+        "atr": 10.14122004,
+        "zone_extreme": 5220.2,
+        "metrics": {
+          "atr": 10.14122,
+          "zone_size": 2.0,
+          "level_distance_atr": 0.0,
+          "lead_body_atr": 2.51449,
+          "lead_body_to_range": 0.85,
+          "lead_body_ratio": 5.848624,
+          "zone_mean_body_vs_lead": 0.058824,
+          "zone_range_vs_lead_range": 0.31,
+          "zone_max_wick_ratio": 0.625,
+          "zone_wick_share": 1.0,
+          "zone_overshoot_atr": 0.078886,
+          "execution_body_atr": 0.690252,
+          "execution_body_to_range": 0.853659,
+          "execution_close_position": 0.914634
+        }
+      },
+      "account_before": {
+        "balance": 11111.11,
+        "equity": 11111.11,
+        "margin_used": 0.0,
+        "margin_free": 11111.11,
+        "margin_level": 0.0,
+        "currency": "EUR",
+        "timestamp": "2026-09-12T13:40:18.935247+00:00"
+      },
+      "updated_at": "2026-09-12T13:40:18.936793+00:00"
+    },
+    {
+      "signal_id": "GER40-20260912T152000-8b661d",
+      "timestamp": "2026-09-12T15:20:00+00:00",
+      "symbol": "GER40",
+      "direction": "SHORT",
+      "entry_price": null,
+      "stop_price": null,
+      "target_price": null,
+      "volume": null,
+      "ratio_rr": null,
+      "level_used": {
+        "price": 18420.0,
+        "type": "previous_day_high",
+        "touches": 2,
+        "width": 0.0
+      },
+      "status": "REJECTED",
+      "pnl": null,
+      "risk_fraction_used": null,
+      "capital_available_before_trade": null,
+      "notional_engaged": null,
+      "risk_amount": null,
+      "margin_required": null,
+      "position_id": null,
+      "order_id": null,
+      "close_time": null,
+      "close_price": null,
+      "close_reason": null,
+      "rejection_reason": "risk_reward_below_minimum",
+      "session": null,
+      "timeframe_minutes": 5,
+      "notes": [],
+      "setup": {
+        "computed_rr": 1.42,
+        "min_required": 2.0
+      },
+      "account_before": null,
+      "updated_at": "2026-09-12T13:40:18.937357+00:00"
+    }
+  ]
+}
